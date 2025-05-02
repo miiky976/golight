@@ -4,127 +4,159 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
+	"path"
 	"strconv"
-	"strings"
 )
 
 const (
-	BACKLIGHT_PATH string = "/sys/class/backlight/"
+	BACKLIGHT_PATH   = "/sys/class/backlight/"
+	BACKLIGHT_ACTUAL = "actual_brightness"
+	BACKLIGHT_MAX    = "max_brightness"
+	BACKLIGHT        = "brightness"
+	DESC             = "Modify backlight brightness."
+	USAGE            = "Usage of %s:\n"
+	USAGE_DATA       = "Run without args to get the actual brightness level"
 )
 
 var (
 	setValue int
-	incValue int
+	id       int
+	idp      int
+	driver   string
+	list     bool
 )
 
 func init() {
 	flag.IntVar(&setValue, "set", -1, "Set the brightness value raw")
-	flag.IntVar(&incValue, "inc", 0, "Increment brightness")
+	flag.IntVar(&id, "id", 0, "Increment or Decrease brightness")
+	flag.IntVar(&idp, "idp", 0, "Increment or Decrease brightness by Percentage")
+	flag.StringVar(&driver, "driver", "", "Number of driver to modify, by default it modifies the first (literally the index)")
+	flag.BoolVar(&list, "list", false, "List the available drivers")
 }
 
 func main() {
-	var err error
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Println("Run without args to get the actual brightness")
+		fmt.Println(DESC)
+		fmt.Printf(USAGE, os.Args[0])
+		fmt.Println(USAGE_DATA)
 		flag.PrintDefaults()
 	}
-	var changed int
-	dir := getDrivers(BACKLIGHT_PATH)
-	flag.Parse()
-	if setValue != -1 {
-		err = set(setValue, dir[0])
-		changed = setValue
-	}
-	if incValue == 0 {
-		changed, err = inc(incValue, dir[0])
-	} else {
-		changed, err = inc(incValue, dir[0])
-	}
-	fmt.Println(changed)
+	drivers, err := getDrivers(BACKLIGHT_PATH)
 	if err != nil {
-		// TODO
 		log.Fatal(err)
 	}
-
+	flag.Parse()
+	printDrivers(drivers)
+	setDriver(drivers)
+	setLevel()
+	idLevel()
+	idpLevel()
+	fmt.Println(getLevel())
 }
 
-func getDrivers(path string) []string {
+func printDrivers(drivers []string) {
+	if list {
+		for i, d := range drivers {
+			fmt.Printf("%d - %s\n", i, d)
+		}
+		os.Exit(0)
+	}
+}
+
+func setDriver(drivers []string) {
+	if driver == "" {
+		driver = drivers[0]
+	} else {
+		d, err := strconv.Atoi(driver)
+		if err != nil {
+			panic(err)
+		}
+		if d < 0 && d > len(drivers) {
+			panic("Cmon that's not a valid index")
+		}
+		driver = drivers[d]
+	}
+}
+
+func getLevel() int {
+	act := path.Join(driver, BACKLIGHT_ACTUAL)
+	data, err := os.ReadFile(act)
+	if err != nil {
+		panic(err)
+	}
+	val := string(data[:len(data)-1])
+	actual, _ := strconv.Atoi(val)
+	return actual
+}
+
+func getMax() int {
+	mx := path.Join(driver, BACKLIGHT_MAX)
+	data, err := os.ReadFile(mx)
+	if err != nil {
+		panic(err)
+	}
+	val := string(data[:len(data)-1])
+	maxim, _ := strconv.Atoi(val)
+	return maxim
+}
+
+func getDrivers(path string) ([]string, error) {
 	var drivers []string
 	dirs, err := os.ReadDir(path)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	for _, i := range dirs {
 		drivers = append(drivers, path+i.Name())
 	}
-	return drivers
+	return drivers, nil
 }
 
-func getMax(path string) (int, error) {
-	maxFile, err := os.ReadFile(path + "/max_brightness")
-	if err != nil {
-		return 0, err
+func setLevel() {
+	if setValue < 0 {
+		return
 	}
-	maxValue, err := strconv.Atoi(strings.Replace(string(maxFile), "\n", "", -1))
+	set := path.Join(driver, BACKLIGHT)
+	data, err := os.OpenFile(set, os.O_WRONLY|os.O_TRUNC, os.ModeAppend)
 	if err != nil {
-		return 0, err
+		panic(err)
 	}
-	return maxValue, nil
+	setValue = min(getMax(), setValue)
+	_, err = data.Write([]byte(strconv.Itoa(setValue)))
+	if err != nil {
+		panic(err)
+	}
 }
 
-func getActual(path string) (int, error) {
-	actualFile, err := os.ReadFile(path + "/actual_brightness")
-	if err != nil {
-		return 0, err
+func idLevel() {
+	if id == 0 {
+		return
 	}
-	maxValue, err := strconv.Atoi(strings.Replace(string(actualFile), "\n", "", -1))
-	if err != nil {
-		return 0, err
-	}
-	return maxValue, nil
+	actual := getLevel()
+	actual += id
+	setValue = min(getMax(), actual)
+	setValue = max(0, actual)
+	setLevel()
 }
 
-func set(value int, path string) error {
-	maxim, err := getMax(path)
-	if err != nil {
-		return err
+func idpLevel() {
+	if idp == 0 {
+		return
 	}
-	brightness, err := os.OpenFile(path+"/brightness", os.O_WRONLY|os.O_TRUNC, os.ModeAppend)
-	if err != nil {
-		return err
+	maxim := getMax()
+	actual := getLevel()
+	pt := float64(maxim) / 100
+	val := pt * float64(idp)
+	// This is to make it a little more accurate
+	// because when 255 is the maximum it leads to inconsistencies when rounding
+	if idp < 0 {
+		actual += int(math.Floor(val))
+	} else {
+		actual += int(math.Ceil(val))
 	}
-	if value >= 0 && value <= maxim {
-		_, err = brightness.Write([]byte(strconv.Itoa(value) + "\n"))
-		if err != nil {
-			return err
-		}
-	}
-	err = brightness.Close()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func inc(value int, path string) (int, error) {
-	maxim, err := getMax(path)
-	if err != nil {
-		return 0, err
-	}
-	actual, err := getActual(path)
-	if err != nil {
-		return 0, err
-	}
-	newValue := actual + value
-	if newValue > maxim {
-		set(maxim, path)
-		return maxim, nil
-	}
-	if value < 0 && value > maxim {
-		return actual, nil
-	}
-	set(newValue, path)
-	return newValue, nil
+	setValue = min(maxim, actual)
+	setValue = max(0, actual)
+	setLevel()
 }
