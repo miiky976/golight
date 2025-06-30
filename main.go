@@ -12,7 +12,7 @@ import (
 
 const (
 	BACKLIGHT_PATH   = "/sys/class/backlight/"
-	BACKLIGHT_ACTUAL = "actual_brightness"
+	BACKLIGHT_ACTUAL = "brightness"
 	BACKLIGHT_MAX    = "max_brightness"
 	BACKLIGHT        = "brightness"
 	DESC             = "Modify backlight brightness."
@@ -26,6 +26,7 @@ var (
 	idp      int
 	driver   string
 	list     bool
+	raw      bool
 )
 
 func init() {
@@ -34,6 +35,7 @@ func init() {
 	flag.IntVar(&idp, "idp", 0, "Increment or Decrease brightness by Percentage")
 	flag.StringVar(&driver, "driver", "", "Number of driver to modify, by default it modifies the first (literally the index)")
 	flag.BoolVar(&list, "list", false, "List the available drivers")
+	flag.BoolVar(&raw, "raw", false, "Return the value as raw (by default its percentage)")
 }
 
 func main() {
@@ -53,7 +55,12 @@ func main() {
 	setLevel()
 	idLevel()
 	idpLevel()
-	fmt.Println(getLevel())
+	if raw {
+		fmt.Println(getLevel())
+	} else {
+		p := (getLevel() * 100) / 255
+		fmt.Println(p)
+	}
 }
 
 func printDrivers(drivers []string) {
@@ -136,7 +143,6 @@ func idLevel() {
 	}
 	actual := getLevel()
 	actual += id
-	setValue = min(getMax(), actual)
 	setValue = max(0, actual)
 	setLevel()
 }
@@ -156,7 +162,6 @@ func idpLevel() {
 	} else {
 		actual += int(math.Ceil(val))
 	}
-	setValue = min(maxim, actual)
 	setValue = max(0, actual)
 	setLevel()
 }
