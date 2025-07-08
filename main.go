@@ -58,7 +58,7 @@ func main() {
 	if raw {
 		fmt.Println(getLevel())
 	} else {
-		p := (getLevel() * 100) / 255
+		p := (getLevel() * 100) / getMax()
 		fmt.Println(p)
 	}
 }
